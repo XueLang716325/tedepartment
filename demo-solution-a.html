@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>方案A演示 - Headless + Metadata Driven</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #121a33;
+        --text: #e7ecff;
+        --muted: #99a7d1;
+        --primary: #5f8bff;
+        --ok: #22c55e;
+        --warn: #f59e0b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        background: linear-gradient(120deg, #0b1020, #121a33 42%, #0f1730);
+        color: var(--text);
+      }
+      header {
+        padding: 18px 24px;
+        border-bottom: 1px solid rgba(255,255,255,.1);
+        position: sticky;
+        top: 0;
+        backdrop-filter: blur(8px);
+        background: rgba(10,14,28,.6);
+      }
+      header h1 { margin: 0; font-size: 20px; }
+      header p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+
+      .wrap {
+        display: grid;
+        grid-template-columns: 1.15fr 1fr;
+        gap: 16px;
+        padding: 18px;
+      }
+      .panel {
+        background: rgba(18, 26, 51, .92);
+        border: 1px solid rgba(255,255,255,.08);
+        border-radius: 14px;
+        padding: 14px;
+      }
+      .panel h2 { margin: 0 0 10px; font-size: 16px; }
+      .muted { color: var(--muted); font-size: 13px; }
+      textarea {
+        width: 100%;
+        min-height: 350px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,.14);
+        background: #0d1430;
+        color: #dbe6ff;
+        padding: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 13px;
+      }
+      button {
+        margin-top: 10px;
+        background: var(--primary);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 10px 14px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .status { margin-left: 10px; font-size: 13px; }
+      .status.ok { color: var(--ok); }
+      .status.err { color: #ef4444; }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 10px;
+      }
+      .card {
+        border: 1px solid rgba(255,255,255,.1);
+        border-radius: 10px;
+        padding: 10px;
+        background: rgba(10,14,28,.45);
+      }
+      .chip {
+        display: inline-block;
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 3px 8px;
+        background: rgba(95,139,255,.2);
+        color: #bed0ff;
+      }
+      .block {
+        border-left: 3px solid var(--primary);
+        padding: 8px 10px;
+        margin: 8px 0;
+        background: rgba(95,139,255,.08);
+        border-radius: 6px;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .legend {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .legend .chip.warn { background: rgba(245,158,11,.2); color: #ffd08b; }
+      @media (max-width: 960px) {
+        .wrap { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>方案A演示页面：后台配置 -> 页面模块 -> 数据库映射</h1>
+      <p>左边模拟后台“内容模型配置”，右边实时展示“网站页面渲染”和“PostgreSQL建表SQL”。</p>
+    </header>
+
+    <main class="wrap">
+      <section class="panel">
+        <h2>后台管理（模拟）</h2>
+        <p class="muted">你可以修改 JSON，点击“应用配置”，演示如何根据新需求快速定义模块、页面和数据结构。</p>
+        <textarea id="configInput"></textarea>
+        <div>
+          <button id="applyBtn">应用配置</button>
+          <span id="status" class="status"></span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>网站前台（模拟预览）</h2>
+        <div class="legend" id="pageMeta"></div>
+        <div id="siteBlocks"></div>
+
+        <h2 style="margin-top:16px">数据库映射（自动生成 SQL）</h2>
+        <p class="muted">实际生产可由 migration service 生成并执行。这里仅演示映射逻辑。</p>
+        <pre id="sqlOutput"></pre>
+      </section>
+
+      <section class="panel" style="grid-column:1/-1">
+        <h2>当前已定义模块</h2>
+        <div class="cards" id="modules"></div>
+      </section>
+    </main>
+
+    <script>
+      const defaultConfig = {
+        site: {
+          name: "TE 测试部门",
+          page: {
+            slug: "/qa-home",
+            title: "测试部门门户",
+            blocks: [
+              { module: "notice", title: "公告栏" },
+              { module: "test_case", title: "最新用例" },
+              { module: "report", title: "质量周报" }
+            ]
+          }
+        },
+        modules: [
+          {
+            key: "notice",
+            table: "qa_notice",
+            fields: [
+              { name: "title", type: "string", required: true },
+              { name: "content", type: "text", required: true },
+              { name: "publish_at", type: "datetime" }
+            ]
+          },
+          {
+            key: "test_case",
+            table: "qa_test_case",
+            fields: [
+              { name: "case_id", type: "string", required: true, unique: true },
+              { name: "priority", type: "enum", options: ["P0","P1","P2"] },
+              { name: "owner", type: "string" },
+              { name: "status", type: "enum", options: ["draft","active","archived"] }
+            ]
+          },
+          {
+            key: "report",
+            table: "qa_report",
+            fields: [
+              { name: "week", type: "string", required: true },
+              { name: "pass_rate", type: "number" },
+              { name: "summary", type: "text" }
+            ]
+          }
+        ]
+      };
+
+      const configInput = document.getElementById("configInput");
+      const modulesEl = document.getElementById("modules");
+      const sqlOutput = document.getElementById("sqlOutput");
+      const siteBlocks = document.getElementById("siteBlocks");
+      const pageMeta = document.getElementById("pageMeta");
+      const statusEl = document.getElementById("status");
+
+      const TYPE_MAP = {
+        string: "VARCHAR(255)",
+        text: "TEXT",
+        number: "NUMERIC",
+        datetime: "TIMESTAMP",
+        boolean: "BOOLEAN",
+        enum: "VARCHAR(32)"
+      };
+
+      function render(config) {
+        const modules = config.modules || [];
+
+        modulesEl.innerHTML = modules.map((m) => {
+          const fields = m.fields.map((f) => {
+            const extra = f.required ? "<span class='chip warn'>required</span>" : "";
+            return `<div class='block'><strong>${f.name}</strong> : ${f.type} ${extra}</div>`;
+          }).join("");
+          return `
+            <article class='card'>
+              <h3 style='margin:0 0 8px'>${m.key}</h3>
+              <div class='chip'>table: ${m.table}</div>
+              <div style='margin-top:8px'>${fields}</div>
+            </article>
+          `;
+        }).join("");
+
+        const page = config.site?.page || {};
+        pageMeta.innerHTML = `
+          <span class='chip'>站点：${config.site?.name || "-"}</span>
+          <span class='chip'>页面：${page.title || "-"}</span>
+          <span class='chip'>路由：${page.slug || "-"}</span>
+        `;
+
+        siteBlocks.innerHTML = (page.blocks || []).map((b) => {
+          const mod = modules.find((m) => m.key === b.module);
+          if (!mod) return `<div class='block'><strong>${b.title}</strong>（模块 ${b.module} 未定义）</div>`;
+          return `<div class='block'><strong>${b.title}</strong> -> 绑定模块 <code>${mod.key}</code> -> 表 <code>${mod.table}</code></div>`;
+        }).join("");
+
+        sqlOutput.textContent = modules.map(toSQL).join("\n\n");
+      }
+
+      function toSQL(module) {
+        const lines = [
+          `CREATE TABLE IF NOT EXISTS ${module.table} (`,
+          `  id BIGSERIAL PRIMARY KEY,`
+        ];
+
+        module.fields.forEach((f) => {
+          const type = TYPE_MAP[f.type] || "TEXT";
+          const required = f.required ? " NOT NULL" : "";
+          const unique = f.unique ? " UNIQUE" : "";
+          lines.push(`  ${f.name} ${type}${required}${unique},`);
+        });
+
+        lines.push("  created_at TIMESTAMP DEFAULT NOW(),");
+        lines.push("  updated_at TIMESTAMP DEFAULT NOW()");
+        lines.push(");");
+
+        return lines.join("\n");
+      }
+
+      document.getElementById("applyBtn").addEventListener("click", () => {
+        try {
+          const parsed = JSON.parse(configInput.value);
+          render(parsed);
+          statusEl.textContent = "配置已应用。";
+          statusEl.className = "status ok";
+        } catch (err) {
+          statusEl.textContent = `JSON 格式错误：${err.message}`;
+          statusEl.className = "status err";
+        }
+      });
+
+      configInput.value = JSON.stringify(defaultConfig, null, 2);
+      render(defaultConfig);
+    </script>
+  </body>
+</html>
